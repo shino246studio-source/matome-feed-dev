@@ -139,6 +139,7 @@ def load_store() -> dict:
 def merge_into_store(store: dict, new_articles: list[dict]) -> dict:
     articles = store.get("articles", {})
     cutoff = datetime.now(timezone.utc) - timedelta(days=STORE_TTL_DAYS)
+    valid_site_ids = {f["id"] for f in FEEDS}
 
     for a in new_articles:
         key = a.get("url")
@@ -149,6 +150,8 @@ def merge_into_store(store: dict, new_articles: list[dict]) -> dict:
     for url, a in articles.items():
         dt = parse_date(a.get("published", ""))
         if dt and dt < cutoff:
+            continue
+        if a.get("site_id") not in valid_site_ids:
             continue
         pruned[url] = a
 
