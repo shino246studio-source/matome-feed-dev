@@ -4,6 +4,7 @@ import json
 import os
 import re
 import requests
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -237,7 +238,6 @@ def fetch_popular_feeds() -> list[dict]:
 
 def _normalize_title(title: str) -> str:
     """タイトル比較用に正規化（空白・全角半角の差異を吸収）"""
-    import unicodedata
     t = unicodedata.normalize("NFKC", title)
     # 全種類の空白を除去
     t = re.sub(r'\s+', '', t)
@@ -298,9 +298,9 @@ def main():
     print(f"[STORE] Store after merge: {len(store_articles)} articles")
 
     # 4. feed.json: storeから新しい順に3000件（未来の記事を除外）
-    sorted_articles = sorted(store_articles.values(), key=sort_key, reverse=True)
-    sorted_articles = [a for a in sorted_articles if sort_key(a) <= now]
-    feed_articles = sorted_articles[:3000]
+    past_articles = [a for a in store_articles.values() if sort_key(a) <= now]
+    past_articles.sort(key=sort_key, reverse=True)
+    feed_articles = past_articles[:3000]
 
     article_urls = [a["url"] for a in feed_articles if a["url"]]
     hatena_counts = fetch_hatena_counts(article_urls)
