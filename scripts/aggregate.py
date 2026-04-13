@@ -90,7 +90,7 @@ def proxy_thumbnail(url: str | None) -> str | None:
     """画像URLをwsrv.nlプロキシ経由のWebP縮小URLに変換"""
     if not url:
         return None
-    return f"https://wsrv.nl/?url={quote(url, safe='')}&w=400&h=400&output=webp&q=80"
+    return f"https://wsrv.nl/?url={quote(url, safe='')}&w=200&h=200&output=webp&q=80"
 
 
 # ── はてなブックマーク ────────────────────────────────
