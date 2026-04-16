@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from feeds import FEEDS
+from trend import extract_trends
 
 # ── 定数 ──────────────────────────────────────────────
 STORE_TTL_DAYS = 7
@@ -189,6 +190,7 @@ def fetch_feed(feed_info: dict) -> dict:
                 "thumbnail": proxy_thumbnail(extract_thumbnail(entry)),
                 "site_id":   feed_info["id"],
                 "site_name": feed_info["name"],
+                "category": feed_info.get("category", ""),
             })
 
         return {"site_id": feed_info["id"], "articles": articles, "ok": True}
@@ -329,7 +331,28 @@ def main():
 
     print(f"[OK] {len(feed_articles)} articles → output/feed.json")
 
-    # 5. popular.json: 1時間に1回更新
+    # 5. trends.json: カテゴリ別+全体+人気のトレンドワード
+    print("[TREND] Extracting trend words...")
+    trend_categories = {"all": past_articles}
+    for cat in ["news", "entame", "neta", "life", "sports", "anige"]:
+        trend_categories[cat] = [a for a in past_articles if a.get("category") == cat]
+
+    trends_output = {
+        "schema_version": 1,
+        "updated_at": now.isoformat(),
+        "hours_window": 24,
+        "categories": {},
+        "popular": [],
+    }
+    for cat, cat_articles in trend_categories.items():
+        trends_output["categories"][cat] = extract_trends(cat_articles, top_n=10, min_count=3, hours_window=24)
+        print(f"[TREND] {cat}: {len(trends_output['categories'][cat])} words from {len(cat_articles)} articles")
+
+    with open("output/trends.json", "w", encoding="utf-8") as f:
+        json.dump(trends_output, f, ensure_ascii=False, separators=(",", ":"))
+    print("[OK] trends.json → output/trends.json")
+
+    # 6. popular.json: 1時間に1回更新
     if should_update_popular(store):
         print("[POP] Updating popular articles...")
         popular_entries = fetch_popular_feeds()
@@ -356,6 +379,13 @@ def main():
 
         store["popular_updated_at"] = now.isoformat()
         print(f"[POP] {len(popular_articles)} popular articles → output/popular.json")
+
+        # popular記事のトレンドをtrends.jsonに追加
+        popular_trends = extract_trends(popular_articles, top_n=10, min_count=2, hours_window=0)
+        trends_output["popular"] = popular_trends
+        with open("output/trends.json", "w", encoding="utf-8") as f:
+            json.dump(trends_output, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"[TREND] popular: {len(popular_trends)} words")
     else:
         print("[SKIP] Popular update skipped (less than 1 hour since last update)")
 
