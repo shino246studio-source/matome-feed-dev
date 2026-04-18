@@ -238,67 +238,109 @@ def extract_trends(
 
                 i += match_n if matched_word is not None else 1
 
-    # Step 6: 部分文字列の重複排除 + ランキング出力
+    # Step 6: クラスタリング + ランキング出力
     filtered_counts = {w: c for w, c in word_counter.items() if c >= min_count}
-    full_ranking = sorted(filtered_counts.items(), key=lambda x: x[1], reverse=True)
-    ranking = _dedupe_by_containment(full_ranking, top_n)
+    clusters = _cluster_and_rank(filtered_counts, word_articles, top_n)
 
     return [
         {
             "rank": i,
-            "word": word,
+            "word": display,
+            "search_keys": search_keys,
             "count": count,
-            "sample_titles": word_articles.get(word, []),
+            "sample_titles": sample_titles,
         }
-        for i, (word, count) in enumerate(ranking, 1)
+        for i, (display, count, search_keys, sample_titles) in enumerate(clusters, 1)
     ]
 
 
-def _dedupe_by_containment(full_ranking: list[tuple], top_n: int) -> list[tuple]:
+# ── クラスタリング（関連ワードの統合）───────────────────
+def _common_prefix_len(a: str, b: str) -> int:
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return i
+    return n
+
+
+def _common_suffix_len(a: str, b: str) -> int:
+    n = min(len(a), len(b))
+    for i in range(1, n + 1):
+        if a[-i] != b[-i]:
+            return i - 1
+    return n
+
+
+# 共通接頭辞・接尾辞の最低長（両方揃う必要あり）
+COMMON_AFFIX_MIN_LEN = 2
+
+
+def _is_related(a: str, b: str) -> bool:
+    """2つのワードが関連ワード（統合対象）かを判定"""
+    if a == b:
+        return False
+    # 1. 包含関係（どちらかが部分文字列）
+    if a in b or b in a:
+        return True
+    # 2. 共通接頭辞 かつ 共通接尾辞 が各2文字以上
+    if (
+        _common_prefix_len(a, b) >= COMMON_AFFIX_MIN_LEN
+        and _common_suffix_len(a, b) >= COMMON_AFFIX_MIN_LEN
+    ):
+        return True
+    return False
+
+
+def _cluster_words(words: list[str]) -> list[list[str]]:
     """
-    Top-N内で、他のワード（より短い方）を部分文字列として含むワードを除去し、
-    次点で繰り上げる。短い方（2-gram等）を優先する。
-    例: Top10内に「辺野古」と「辺野古転覆」の両方がある場合、「辺野古転覆」を除去。
-
-    Args:
-        full_ranking: [(word, count), ...] 降順ソート済みの全候補
-        top_n: 返すワード数の上限
+    完全連結法（complete linkage）でクラスタリング。
+    クラスタ同士を統合するには、全ての inter-cluster ペアが関連条件を満たす必要がある。
+    推移的な誤統合（外相 <-> イラン外相 <-> イラン <-> イラン戦争）を防ぐ。
     """
-    result = list(full_ranking[:top_n])
-    next_idx = top_n
+    clusters = [[w] for w in words]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(clusters)):
+            merged = False
+            for j in range(i + 1, len(clusters)):
+                # クラスタ i と j の全ペアが related か
+                if all(_is_related(a, b) for a in clusters[i] for b in clusters[j]):
+                    clusters[i] = clusters[i] + clusters[j]
+                    clusters.pop(j)
+                    merged = True
+                    changed = True
+                    break
+            if merged:
+                break
+    return clusters
 
-    while True:
-        current_words = [w for w, _ in result]
-        kept = []
-        removed_any = False
-        for w, c in result:
-            # より短い他のワードが、このワードの部分文字列になっているか
-            # その場合はこのワード（長い方）を除外
-            contains_shorter = any(
-                other != w and other in w for other in current_words
-            )
-            if contains_shorter:
-                removed_any = True
-                continue
-            kept.append((w, c))
 
-        if not removed_any:
-            result = kept
-            break
+def _cluster_and_rank(
+    filtered_counts: dict[str, int],
+    word_articles: dict[str, list[str]],
+    top_n: int,
+) -> list[tuple]:
+    """
+    関連ワードをクラスタリングし、各クラスタの代表情報を返す。
 
-        # 次点で補充（次点も既存ワード（短い方）を含む場合はさらに繰り上げ）
-        while len(kept) < top_n and next_idx < len(full_ranking):
-            candidate_word, candidate_count = full_ranking[next_idx]
-            next_idx += 1
-            contains_shorter = any(
-                other != candidate_word and other in candidate_word
-                for other in [w for w, _ in kept]
-            )
-            if not contains_shorter:
-                kept.append((candidate_word, candidate_count))
+    Returns:
+        [(display_word, count, search_keys, sample_titles), ...] 最大count降順、上位top_n件
+    """
+    words = list(filtered_counts.keys())
+    clusters = _cluster_words(words)
 
-        result = kept
-        if next_idx >= len(full_ranking):
-            break
+    cluster_info = []
+    for cluster in clusters:
+        # countはクラスタ内最大
+        max_count = max(filtered_counts[w] for w in cluster)
+        # 表示用は最長ワード（同長なら count 多い方）
+        display = max(cluster, key=lambda w: (len(w), filtered_counts[w]))
+        # search_keysは短い順（部分一致検索で広くヒットしやすい順）
+        search_keys = sorted(cluster, key=lambda w: (len(w), w))
+        # sample_titlesは表示用ワードのもの
+        sample_titles = word_articles.get(display, [])
+        cluster_info.append((display, max_count, search_keys, sample_titles))
 
-    return result
+    cluster_info.sort(key=lambda x: x[1], reverse=True)
+    return cluster_info[:top_n]
