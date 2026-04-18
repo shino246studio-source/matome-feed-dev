@@ -238,9 +238,10 @@ def extract_trends(
 
                 i += match_n if matched_word is not None else 1
 
-    # Step 6: ランキング出力
+    # Step 6: 部分文字列の重複排除 + ランキング出力
     filtered_counts = {w: c for w, c in word_counter.items() if c >= min_count}
-    ranking = sorted(filtered_counts.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    full_ranking = sorted(filtered_counts.items(), key=lambda x: x[1], reverse=True)
+    ranking = _dedupe_by_containment(full_ranking, top_n)
 
     return [
         {
@@ -251,3 +252,53 @@ def extract_trends(
         }
         for i, (word, count) in enumerate(ranking, 1)
     ]
+
+
+def _dedupe_by_containment(full_ranking: list[tuple], top_n: int) -> list[tuple]:
+    """
+    Top-N内で、他のワード（より短い方）を部分文字列として含むワードを除去し、
+    次点で繰り上げる。短い方（2-gram等）を優先する。
+    例: Top10内に「辺野古」と「辺野古転覆」の両方がある場合、「辺野古転覆」を除去。
+
+    Args:
+        full_ranking: [(word, count), ...] 降順ソート済みの全候補
+        top_n: 返すワード数の上限
+    """
+    result = list(full_ranking[:top_n])
+    next_idx = top_n
+
+    while True:
+        current_words = [w for w, _ in result]
+        kept = []
+        removed_any = False
+        for w, c in result:
+            # より短い他のワードが、このワードの部分文字列になっているか
+            # その場合はこのワード（長い方）を除外
+            contains_shorter = any(
+                other != w and other in w for other in current_words
+            )
+            if contains_shorter:
+                removed_any = True
+                continue
+            kept.append((w, c))
+
+        if not removed_any:
+            result = kept
+            break
+
+        # 次点で補充（次点も既存ワード（短い方）を含む場合はさらに繰り上げ）
+        while len(kept) < top_n and next_idx < len(full_ranking):
+            candidate_word, candidate_count = full_ranking[next_idx]
+            next_idx += 1
+            contains_shorter = any(
+                other != candidate_word and other in candidate_word
+                for other in [w for w, _ in kept]
+            )
+            if not contains_shorter:
+                kept.append((candidate_word, candidate_count))
+
+        result = kept
+        if next_idx >= len(full_ranking):
+            break
+
+    return result
