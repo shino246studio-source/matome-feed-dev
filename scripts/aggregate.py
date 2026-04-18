@@ -345,7 +345,7 @@ def main():
         "popular": [],
     }
     for cat, cat_articles in trend_categories.items():
-        trends_output["categories"][cat] = extract_trends(cat_articles, top_n=10, min_count=3, hours_window=24)
+        trends_output["categories"][cat] = extract_trends(cat_articles, top_n=15, min_count=3, hours_window=24)
         print(f"[TREND] {cat}: {len(trends_output['categories'][cat])} words from {len(cat_articles)} articles")
 
     with open("output/trends.json", "w", encoding="utf-8") as f:
@@ -381,7 +381,7 @@ def main():
         print(f"[POP] {len(popular_articles)} popular articles → output/popular.json")
 
         # popular記事のトレンドをtrends.jsonに追加
-        popular_trends = extract_trends(popular_articles, top_n=10, min_count=2, hours_window=0)
+        popular_trends = extract_trends(popular_articles, top_n=15, min_count=2, hours_window=0)
         trends_output["popular"] = popular_trends
         with open("output/trends.json", "w", encoding="utf-8") as f:
             json.dump(trends_output, f, ensure_ascii=False, separators=(",", ":"))
