@@ -193,8 +193,9 @@ def extract_trends(
     # Step 4-5: 最長一致で結合してカウント
     word_counter = Counter()
     word_articles: dict[str, list[str]] = {}
+    word_article_set: dict[str, set[int]] = {}
 
-    for title, seq in zip(titles, all_seqs):
+    for idx, (title, seq) in enumerate(zip(titles, all_seqs)):
         seen_in_title: set[str] = set()
         for run in _split_by_none(seq):
             i = 0
@@ -235,12 +236,13 @@ def extract_trends(
                         word_articles[word] = []
                     if len(word_articles[word]) < 3:
                         word_articles[word].append(title)
+                    word_article_set.setdefault(word, set()).add(idx)
 
                 i += match_n if matched_word is not None else 1
 
-    # Step 6: クラスタリング + ランキング出力
+    # Step 6: クラスタリング + 共起による抑制 + ランキング出力
     filtered_counts = {w: c for w, c in word_counter.items() if c >= min_count}
-    clusters = _cluster_and_rank(filtered_counts, word_articles, top_n)
+    clusters = _cluster_and_rank(filtered_counts, word_articles, word_article_set, top_n)
 
     return [
         {
@@ -316,13 +318,18 @@ def _cluster_words(words: list[str]) -> list[list[str]]:
     return clusters
 
 
+# 共起による抑制の閾値（Jaccard類似度）
+COOCCUR_SUPPRESS_THRESHOLD = 0.8
+
+
 def _cluster_and_rank(
     filtered_counts: dict[str, int],
     word_articles: dict[str, list[str]],
+    word_article_set: dict[str, set[int]],
     top_n: int,
 ) -> list[tuple]:
     """
-    関連ワードをクラスタリングし、各クラスタの代表情報を返す。
+    関連ワードをクラスタリングし、共起による抑制を適用した代表情報を返す。
 
     Returns:
         [(display_word, count, search_keys, sample_titles), ...] 最大count降順、上位top_n件
@@ -330,17 +337,46 @@ def _cluster_and_rank(
     words = list(filtered_counts.keys())
     clusters = _cluster_words(words)
 
+    # 各クラスタの情報を構築
     cluster_info = []
     for cluster in clusters:
-        # countはクラスタ内最大
         max_count = max(filtered_counts[w] for w in cluster)
-        # 表示用は最長ワード（同長なら count 多い方）
         display = max(cluster, key=lambda w: (len(w), filtered_counts[w]))
-        # search_keysは短い順（部分一致検索で広くヒットしやすい順）
         search_keys = sorted(cluster, key=lambda w: (len(w), w))
-        # sample_titlesは表示用ワードのもの
         sample_titles = word_articles.get(display, [])
-        cluster_info.append((display, max_count, search_keys, sample_titles))
+        # クラスタ全体の記事集合
+        article_union: set[int] = set()
+        for w in cluster:
+            article_union |= word_article_set.get(w, set())
+        cluster_info.append((display, max_count, search_keys, sample_titles, article_union))
 
+    # 最大count降順でソート
     cluster_info.sort(key=lambda x: x[1], reverse=True)
-    return cluster_info[:top_n]
+
+    # 共起抑制: 高共起な低countクラスタを除外
+    kept = []
+    for info in cluster_info:
+        _, _, _, _, article_union = info
+        if not article_union:
+            kept.append(info)
+            continue
+        suppressed = False
+        for kept_info in kept:
+            _, _, _, _, kept_articles = kept_info
+            if not kept_articles:
+                continue
+            intersect = len(article_union & kept_articles)
+            union_size = len(article_union | kept_articles)
+            if union_size == 0:
+                continue
+            jaccard = intersect / union_size
+            if jaccard >= COOCCUR_SUPPRESS_THRESHOLD:
+                suppressed = True
+                break
+        if not suppressed:
+            kept.append(info)
+        if len(kept) >= top_n:
+            break
+
+    # article_unionを除いたタプルに戻す
+    return [(d, c, s, st) for d, c, s, st, _ in kept[:top_n]]
